@@ -98,6 +98,13 @@ function formatResult(label: string, data: unknown[], total: number): string {
     return `${data.length} résultat(s) sur ${total} au total :\n\n${JSON.stringify(data, null, 2)}`;
 }
 
+// Libellé d'une relation many-to-one : l'API REST ne renvoie que la colonne de nom du modèle cible,
+// qui est fullName pour Partner, User, Project, ProjectTask, Product… et name pour les autres.
+function refName(ref: { name?: unknown; fullName?: unknown } | null | undefined): string | undefined {
+    const v = ref?.fullName ?? ref?.name;
+    return typeof v === "string" ? v : undefined;
+}
+
 function text(content: string) {
     return { content: [{ type: "text" as const, text: content }] };
 }
@@ -231,8 +238,8 @@ function groupOrders(orders: SaleOrderAnalysis[], groupBy: "month" | "client" | 
     for (const o of orders) {
         let key: string;
         if (groupBy === "month") key = o.orderDate ? o.orderDate.slice(0, 7) : "inconnu";
-        else if (groupBy === "client") key = o.clientPartner?.name ?? "inconnu";
-        else if (groupBy === "salesperson") key = o.salespersonUser?.name ?? "non assigné";
+        else if (groupBy === "client") key = refName(o.clientPartner) ?? "inconnu";
+        else if (groupBy === "salesperson") key = refName(o.salespersonUser) ?? "non assigné";
         else key = statusLabels[o.statusSelect] ?? String(o.statusSelect);
 
         const g = map.get(key) ?? {
@@ -402,15 +409,15 @@ server.registerTool(
     4 = Terminée
     5 = Annulée
 
-  invoicingState :
-    0 = Non facturé
-    1 = Partiellement facturé
-    2 = Facturé
+  invoicingState (supplychain.sale.order.invoicing.state.select) :
+    1 = Non facturé
+    2 = Partiellement facturé
+    3 = Facturé
 
-  deliveryState :
-    0 = Non livré
-    1 = Partiellement livré
-    2 = Livré
+  deliveryState (sale.order.delivery.state) :
+    1 = Non livré
+    2 = Partiellement livré
+    3 = Livré
 */
 
 server.registerTool(
@@ -471,11 +478,11 @@ server.registerTool(
         const statusMap = { draft: 1, finalized: 2, confirmed: 3, completed: 4, cancelled: 5 };
         if (statusSelect) criteria.push({ fieldName: "statusSelect", operator: "=", value: statusMap[statusSelect] });
 
-        const invoicingMap = { not_invoiced: 0, partially_invoiced: 1, invoiced: 2 };
+        const invoicingMap = { not_invoiced: 1, partially_invoiced: 2, invoiced: 3 };
         if (invoicingState)
             criteria.push({ fieldName: "invoicingState", operator: "=", value: invoicingMap[invoicingState] });
 
-        const deliveryMap = { not_delivered: 0, partially_delivered: 1, delivered: 2 };
+        const deliveryMap = { not_delivered: 1, partially_delivered: 2, delivered: 3 };
         if (deliveryState)
             criteria.push({ fieldName: "deliveryState", operator: "=", value: deliveryMap[deliveryState] });
 
@@ -910,7 +917,7 @@ server.registerTool(
             } else {
                 key = String(line.product?.id ?? `noref_${line.productName}`);
                 const code = line.product?.code ? `[${line.product.code}] ` : "";
-                label = `${code}${line.productName ?? line.product?.name ?? "Produit inconnu"}`;
+                label = `${code}${line.productName ?? refName(line.product) ?? "Produit inconnu"}`;
             }
 
             if (!groups.has(key)) {
@@ -1136,9 +1143,9 @@ function groupOpportunities(
     for (const o of opps) {
         let key: string;
         if (groupBy === "month") key = o.expectedCloseDate ? o.expectedCloseDate.slice(0, 7) : "sans date";
-        else if (groupBy === "salesperson") key = o.user?.name ?? "non assigné";
-        else if (groupBy === "source") key = o.source?.name ?? "sans source";
-        else key = o.opportunityStatus?.name ?? "sans statut";
+        else if (groupBy === "salesperson") key = refName(o.user) ?? "non assigné";
+        else if (groupBy === "source") key = refName(o.source) ?? "sans source";
+        else key = refName(o.opportunityStatus) ?? "sans statut";
 
         const g = map.get(key) ?? {
             key,
@@ -1349,9 +1356,9 @@ function groupProjects(
 
     for (const p of projects) {
         let key: string;
-        if (groupBy === "client") key = p.clientPartner?.name ?? "sans client";
-        else if (groupBy === "assignedTo") key = p.assignedTo?.name ?? "non assigné";
-        else key = p.projectStatus?.name ?? "sans statut";
+        if (groupBy === "client") key = refName(p.clientPartner) ?? "sans client";
+        else if (groupBy === "assignedTo") key = refName(p.assignedTo) ?? "non assigné";
+        else key = refName(p.projectStatus) ?? "sans statut";
 
         const g = map.get(key) ?? {
             key,
@@ -1584,13 +1591,13 @@ function groupTimesheetLines(lines: TimesheetLineData[], groupBy: "project" | "e
 
     for (const line of lines) {
         const hours = Number(line.hoursDuration) || 0;
-        const taskName = line.projectTask?.name ?? "Sans tâche";
+        const taskName = refName(line.projectTask) ?? "Sans tâche";
 
         let key: string;
         if (groupBy === "employee") {
-            key = line.timesheet?.employee?.name ?? "Non assigné";
+            key = refName(line.timesheet?.employee) ?? "Non assigné";
         } else {
-            key = line.project?.name ?? "Sans projet";
+            key = refName(line.project) ?? "Sans projet";
         }
 
         const g = map.get(key) ?? { key, totalHours: 0, lineCount: 0, taskBreakdown: {} };
@@ -1770,8 +1777,8 @@ server.registerTool(
         let progressCount = 0;
 
         for (const t of tasks) {
-            const status = t.taskStatus?.name ?? "Sans statut";
-            const assignee = t.assignedTo?.name ?? null;
+            const status = refName(t.taskStatus) ?? "Sans statut";
+            const assignee = refName(t.assignedTo) ?? null;
             const est = Number(t.estimatedTime) || 0;
             const spent = Number(t.spentTime) || 0;
             const progress = t.progressSelect != null ? Number(t.progressSelect) : null;
@@ -1806,7 +1813,7 @@ server.registerTool(
         const lines: string[] = [];
 
         // En-tête affaire
-        const projectLabel = tasks[0]?.project?.name ?? projectName ?? `ID ${projectId}`;
+        const projectLabel = refName(tasks[0]?.project) ?? projectName ?? `ID ${projectId}`;
         lines.push(`Synthèse des tâches — Affaire : ${projectLabel}`);
         lines.push(`${tasks.length} tâche(s) récupérée(s) sur ${total} au total`);
         if (avgProgress !== null) lines.push(`Avancement moyen : ${avgProgress} %`);
@@ -1826,8 +1833,8 @@ server.registerTool(
         if (overdue.length > 0) {
             lines.push(`── ⚠ Tâches en retard (deadline dépassée) : ${overdue.length} ──────`);
             for (const t of overdue) {
-                const who = t.assignedTo?.name ?? "Non assignée";
-                const status = t.taskStatus?.name ?? "?";
+                const who = refName(t.assignedTo) ?? "Non assignée";
+                const status = refName(t.taskStatus) ?? "?";
                 lines.push(`  • [${status}] ${t.name} — ${who} — échéance : ${t.taskDeadline}`);
             }
             lines.push("");
@@ -1837,7 +1844,7 @@ server.registerTool(
         if (unassigned.length > 0) {
             lines.push(`── Tâches sans responsable : ${unassigned.length} ──────────────────`);
             for (const t of unassigned.slice(0, 10)) {
-                const status = t.taskStatus?.name ?? "?";
+                const status = refName(t.taskStatus) ?? "?";
                 lines.push(`  • [${status}] ${t.name}`);
             }
             if (unassigned.length > 10) lines.push(`  … et ${unassigned.length - 10} autre(s)`);
@@ -1858,7 +1865,7 @@ server.registerTool(
         lines.push("");
 
         // Détail des tâches actives (hors statuts terminés)
-        const activeTasks = tasks.filter((t) => !excludedSet.has((t.taskStatus?.name ?? "").toLowerCase()));
+        const activeTasks = tasks.filter((t) => !excludedSet.has((refName(t.taskStatus) ?? "").toLowerCase()));
         if (activeTasks.length > 0) {
             lines.push(`── Détail des tâches actives (${activeTasks.length}) ──────────────────`);
             lines.push(
@@ -1866,8 +1873,8 @@ server.registerTool(
             );
             lines.push(`${"-".repeat(18)}-|-${"-".repeat(20)}-|-${"-".repeat(10)}-|-${"-".repeat(12)}-|--------`);
             for (const t of activeTasks.slice(0, 50)) {
-                const status = (t.taskStatus?.name ?? "?").padEnd(18);
-                const who = (t.assignedTo?.name ?? "—").padEnd(20);
+                const status = (refName(t.taskStatus) ?? "?").padEnd(18);
+                const who = (refName(t.assignedTo) ?? "—").padEnd(20);
                 const prog =
                     t.progressSelect != null ? `${t.progressSelect} %`.padStart(10) : "         ?".padStart(10);
                 const deadline = (t.taskDeadline ?? "—").padEnd(12);
@@ -2072,7 +2079,7 @@ server.registerTool(
         const categoryLabel: Record<number, string> = { 1: "Non bloquant", 2: "Bloquant", 3: "Fonctionnel" };
         const rows = (data as Record<string, unknown>[]).map((t) => {
             const cat = typeof t.categorySelect === "number" ? (categoryLabel[t.categorySelect] ?? `#${t.categorySelect}`) : "?";
-            const user = (t.internalUser as Record<string, unknown> | null)?.name ?? "—";
+            const user = refName(t.internalUser as Record<string, unknown> | null) ?? "—";
             const date = typeof t.date === "string" ? t.date.slice(0, 10) : "—";
             return `[${t.id}] ${date} | ${cat} | ${t.origin ?? "—"} | ${t.exception ?? "—"} | ${t.message ?? t.error ?? "—"} | user: ${user}`;
         });
@@ -2151,7 +2158,7 @@ server.registerTool(
 
         const categoryLabel: Record<number, string> = { 1: "Non bloquant", 2: "Bloquant", 3: "Fonctionnel" };
         const cat = typeof item.categorySelect === "number" ? (categoryLabel[item.categorySelect] ?? `#${item.categorySelect}`) : "?";
-        const user = (item.internalUser as Record<string, unknown> | null)?.name ?? "—";
+        const user = refName(item.internalUser as Record<string, unknown> | null) ?? "—";
 
         const lines: string[] = [
             `══ TraceBack #${item.id} ═══════════════════════════════════════`,
